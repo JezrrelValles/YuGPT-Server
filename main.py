@@ -9,7 +9,9 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pdfminer.high_level import extract_text_to_fp
-from io import BytesIO
+from io import BytesIO, StringIO
+import pandas as pd
+import asyncio
 import fitz
 
 
@@ -94,6 +96,64 @@ def convert_scanned_pdf_to_text(pdf_path):
         return str(e)
 
 
+async def extract_text_from_csv(file: UploadFile):
+    try:
+        content = await file.read()
+        decoded_content = content.decode("utf-8")
+        df = pd.read_csv(StringIO(decoded_content))
+
+        extracted_text = df.where(pd.notna(df), None).to_dict(orient="records")
+
+        return extracted_text
+    except Exception as e:
+        return {"error": f"Error al procesar el archivo Excel: {str(e)}"}
+
+
+async def wait_on_run(thread_id: str, run_id: str, polling_interval: int = 3):
+    """
+    Waits for an OpenAI run to complete.
+
+    Args:
+        thread_id (str): The ID of the thread.
+        run_id (str): The ID of the run.
+        polling_interval (int): Time in seconds to wait between API checks.
+
+    Returns:
+        RunStatus: The final status of the run.
+    """
+    while True:
+        run = await client.beta.threads.runs.retrieve(
+            thread_id=thread_id, run_id=run_id
+        )
+
+        if run.status in run_finished_states:
+            return RunStatus(
+                run_id=run.id,
+                thread_id=thread_id,
+                status=run.status,
+                required_action=run.required_action,
+                last_error=run.last_error,
+            )
+
+        await asyncio.sleep(polling_interval)
+
+
+@app.post("/convert_csv/")
+async def convert_csv(file: UploadFile = File(...)):
+    try:
+        text_data = await extract_text_from_csv(file)
+
+        if isinstance(text_data, dict) and "error" in text_data:
+            return JSONResponse(content=text_data, status_code=400)
+
+        return {"data": text_data}
+    except Exception as e:
+        return JSONResponse(
+            content={"error": f"Error al procesar el archivo CSV: {str(e)}"},
+            status_code=500,
+        )
+
+
 @app.post("/convert_pdf/")
 async def convert_pdf(file: UploadFile = File(...), bank: str = Form(...)):
     assistant = get_assistant_id(bank)
@@ -130,34 +190,43 @@ async def post_new(data: dict = Body(...)):
 
         if not extracted_text or not assistant:
             raise HTTPException(status_code=400, detail="Faltan datos en la solicitud.")
-        
-        try:
-            thread = await client.beta.threads.create()
-        except OpenAIError as e:
-            raise HTTPException(status_code=500, detail=f"Error al crear thread: {str(e)}")
-        
-        try:
-            message = await client.beta.threads.messages.create(
-                thread_id=thread.id, role="user", content=extracted_text
-            )
-        except OpenAIError as e:
-            raise HTTPException(status_code=500, detail=f"Error al crear mensaje: {str(e)}")
-        
-        try:
-            run = await client.beta.threads.runs.create(
-                thread_id=thread.id, assistant_id=assistant
-            )
-        except OpenAIError as e:
-            raise HTTPException(status_code=500, detail=f"Error al ejecutar asistente: {str(e)}")
 
-        return RunStatus(
-            run_id=run.id,
-            thread_id=thread.id,
-            message_id=message.id,
-            status=run.status,
-            required_action=run.required_action,
-            last_error=run.last_error,
+        thread = await client.beta.threads.create()
+
+        message = await client.beta.threads.messages.create(
+            thread_id=thread.id, role="user", content=extracted_text
         )
+
+        run = await client.beta.threads.runs.create(
+            thread_id=thread.id, assistant_id=assistant
+        )
+
+        run_status = await wait_on_run(thread.id, run.id)
+
+        if run_status.status != "completed":
+            return JSONResponse(
+                content={
+                    "error": f"Error al procesar la solicitud: {run_status.status}"
+                },
+                status_code=500,
+            )
+
+        messages = await client.beta.threads.messages.list(thread_id=thread.id)
+
+        assistant_messages = [msg for msg in messages.data if msg.role == "assistant"]
+
+        assistant_response = (
+            assistant_messages[-1].content[0].text.value
+            if assistant_messages
+            else "No hay respuesta del asistente."
+        )
+
+        return {
+            # "run_id": run.id,
+            # "thread_id": thread.id,
+            # "status": run_status.status,
+            "assistant_response": assistant_response
+        }
     except OpenAIError as e:
         raise HTTPException(status_code=500, detail=f"Error de OpenAI: {str(e)}")
 
