@@ -4,9 +4,7 @@ dotenv
 openai
 pydantic
 pdfminer.six
-pymupdf
 python-multipart
 asyncio
 pandas
-openpyxl
-xlrd
+PyMuPDF
