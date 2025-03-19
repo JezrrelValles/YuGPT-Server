@@ -13,8 +13,7 @@ from typing import List, Dict, Optional
 import pandas as pd
 import asyncio
 import fitz
-from deepdiff import DeepDiff
-
+from bank_processors.bank_processor_factory import BankProcessorFactory
 app = FastAPI()
 load_dotenv()
 app.add_middleware(
@@ -32,7 +31,8 @@ client = AsyncOpenAI(
 )
 
 BANKS_TO_ASSISTANT_ID = {
-    "BANAMEX": "asst_IwRnr13nxU1PQRqKPhuXnkhA",
+    # "BANAMEX": "asst_IwRnr13nxU1PQRqKPhuXnkhA",
+    "BANAMEX": "asst_1M8w2HKrJqJdjkPji7eF7JJK",
     "BANBAJIO": "asst_HFb4PfC3IuhImfaesLbDECso",
     "BANORTE": "asst_n4BnRdAVz8xYKZ7o47eur5XX",
     "BANREGIO": "asst_Ogn34gOlZI3VJ6GFpS218KTs",
@@ -89,12 +89,16 @@ def get_assistant_id(bank: str) -> str:
     return BANKS_TO_ASSISTANT_ID[bank]
 
 
-def convert_pdf_to_text(pdf_path):
-    output_buffer = BytesIO()
+def convert_pdf_to_text(pdf_path, bank):
+    # output_buffer = BytesIO()
     with open(pdf_path, "rb") as pdf_file:
-        extract_text_to_fp(pdf_file, output_buffer, output_type="tag")
-        text_content = output_buffer.getvalue().decode("utf-8")
-    return text_content
+        # extract_text_to_fp(pdf_file, output_buffer, output_type="tag")
+
+        processor = BankProcessorFactory.get_processor(bank, pdf_file)
+        process_data = processor.process()
+        process_data = '\n'.join([' '.join(map(str, row)).strip() for row in process_data])
+        
+    return process_data
 
 
 def convert_scanned_pdf_to_text(pdf_path):
@@ -107,6 +111,55 @@ def convert_scanned_pdf_to_text(pdf_path):
     except Exception as e:
         return str(e)
 
+async def extract_text_from_excel(file: UploadFile):
+    try:
+        content = await file.read()  # Read file as binary
+        excel_data = BytesIO(content)  # Convert to BytesIO for pandas
+
+        # Read the file starting from row 7 (row index 6 in pandas)
+        df = pd.read_excel(excel_data, skiprows=6, usecols="A,E:H")
+
+        # Rename columns manually
+        df.columns = ["Fecha", "Referencia","Cargos", "Abonos", "Saldo"]
+
+        saldo_inicial = df.iloc[1]["Saldo"]
+        
+        df_data = df.iloc[4:].reset_index(drop=True)
+
+        df_data = df[df["Fecha"].replace([None, "", " ", 0], pd.NA).notna()].reset_index(drop=True)
+
+        df_data["Cargos"] = pd.to_numeric(df_data["Cargos"], errors="coerce").fillna(0)
+        df_data["Abonos"] = pd.to_numeric(df_data["Abonos"], errors="coerce").fillna(0)
+        df_data["Saldo"] = pd.to_numeric(df_data["Saldo"], errors="coerce").fillna(0)
+
+        total_cargos = round(df_data["Cargos"].sum(), 2)
+        total_abonos = round(df_data["Abonos"].sum(), 2)
+        total_saldo = round(df_data["Saldo"].sum(), 2)
+                
+        # Convert data to JSON format
+        extracted_text = {
+            "saldo_inicial": saldo_inicial,
+            "datos": [
+                {
+                    "FECHA": row["Fecha"],
+                    "MONTO": row["Abonos"] if row["Abonos"] > 0 else row["Cargos"],
+                    "SALDO": row["Saldo"],
+                    "TIPO": "SALDO INICIAL" if row["Cargos"] == 0 and row["Abonos"] == 0 else "DEPOSITO" if row["Abonos"] > 0 else "RETIRO"
+                }
+                for _, row in df_data.iterrows()  
+            ],
+          
+            "total_cargos": total_cargos,
+            "total_abonos": total_abonos,
+            "total_saldo": total_saldo
+            
+        }
+
+        print(extracted_text)  
+        return extracted_text
+    except Exception as e:
+        return {"error": f"Error processing the Excel file: {str(e)}"}
+    
 
 async def extract_text_from_csv(file: UploadFile):
     try:
@@ -153,7 +206,7 @@ async def wait_on_run(thread_id: str, run_id: str, polling_interval: int = 3):
 @app.post("/convert_csv/")
 async def convert_csv(file: UploadFile = File(...)):
     try:
-        text_data = await extract_text_from_csv(file)
+        text_data = await extract_text_from_excel(file)
 
         if isinstance(text_data, dict) and "error" in text_data:
             return JSONResponse(content=text_data, status_code=400)
@@ -176,7 +229,7 @@ async def convert_pdf(file: UploadFile = File(...), bank: str = Form(...)):
             f.write(await file.read())
 
         try:
-            text = convert_pdf_to_text(file_location)
+            text = convert_pdf_to_text(file_location, bank.lower())
             if not text:
                 text = convert_scanned_pdf_to_text(file_location)
 
