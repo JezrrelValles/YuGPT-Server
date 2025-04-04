@@ -15,6 +15,8 @@ import asyncio
 import fitz
 from bank_processors.bank_processor_factory import BankProcessorFactory
 from openpyxl import load_workbook
+from mistralai import Mistral
+import datetime
 
 app = FastAPI()
 load_dotenv()
@@ -31,6 +33,10 @@ app.add_middleware(
 client = AsyncOpenAI(
     api_key=os.getenv("API_KEY"),
 )
+
+mistral_api_key = os.getenv("MISTRAL_API")
+mistral_client = Mistral(api_key=mistral_api_key)
+
 
 BANKS_TO_ASSISTANT_ID = {
     # "BANAMEX": "asst_IwRnr13nxU1PQRqKPhuXnkhA",
@@ -91,7 +97,7 @@ def get_assistant_id(bank: str) -> str:
     return BANKS_TO_ASSISTANT_ID[bank]
 
 
-def convert_pdf_to_text(pdf_path, bank):
+async def convert_pdf_to_text(pdf_path, bank):
     # output_buffer = BytesIO()
     with open(pdf_path, "rb") as pdf_file:
         # extract_text_to_fp(pdf_file, output_buffer, output_type="tag")
@@ -105,15 +111,42 @@ def convert_pdf_to_text(pdf_path, bank):
     return process_data
 
 
-def convert_scanned_pdf_to_text(pdf_path):
+async def convert_scanned_pdf_to_text(pdf_path):
     try:
-        doc = fitz.open(pdf_path)
+        with open(pdf_path, "rb") as file:
+            uploaded_pdf = mistral_client.files.upload(
+                file={
+                    "file_name": pdf_path,
+                    "content": file,
+                },
+                purpose="ocr"
+            )
+
+        signed_url = mistral_client.files.get_signed_url(file_id=uploaded_pdf.id)
+        print(signed_url)
+        ocr_response_pages =  mistral_client.ocr.process(
+            model="mistral-ocr-latest",
+            document={
+                "type": "document_url",
+                "document_url": signed_url.url
+            }
+        ).pages
+        
         text = ""
-        for page in doc:
-            text += page.get_text()
+        for page in ocr_response_pages:
+            text += page.markdown + "\n"
+        
+        print(f"Texto : {text}")
+        
+        await mistral_client.files.delete_async(file_id=uploaded_pdf.id)
+        
+        #Create a .txt with the ocr text extracted
+        with open(datetime.datetime.now().strftime("%Y%m%d%H%M%S") + ".txt", "w") as file:
+            file.write(text)
+            
         return text
     except Exception as e:
-        return str(e)
+        raise Exception(f"Error en convert_scanned_pdf_to_text: {str(e)}")
 
 
 async def extract_text_from_aux(file: UploadFile):
@@ -299,14 +332,20 @@ async def extract_pdf(file: UploadFile = File(...), bank: str = Form(...)):
             f.write(await file.read())
 
         try:
-            text = convert_pdf_to_text(file_location, bank.lower())
-            if not text:
-                text = convert_scanned_pdf_to_text(file_location)
-
+            text = await convert_pdf_to_text(file_location, bank.lower())
         except Exception as e:
-            return JSONResponse(
-                content={"error": f"Error al procesar PDF: {str(e)}"}, status_code=500
-            )
+            print(f"Error en convert_pdf_to_text: {e}")
+            text = None
+
+        if not text:
+            try:
+                text = await convert_scanned_pdf_to_text(file_location)
+            except Exception as e:
+                print(f"Error en convert_scanned_pdf_to_text: {e}")
+                return JSONResponse(
+                    content={"error": f"Error al procesar PDF: {str(e)}"},
+                    status_code=500
+                )
 
         return {
             "assistant": assistant,
@@ -314,8 +353,8 @@ async def extract_pdf(file: UploadFile = File(...), bank: str = Form(...)):
             "extracted_text": text,
         }
     finally:
-        os.remove(file_location)
-
+        if os.path.exists(file_location):
+            os.remove(file_location)
 
 @app.post("/extract_previous/")
 async def extract_previous(file: UploadFile = File(...)):
