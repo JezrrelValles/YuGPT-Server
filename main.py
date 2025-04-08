@@ -41,15 +41,15 @@ mistral_client = Mistral(api_key=mistral_api_key)
 BANKS_TO_ASSISTANT_ID = {
     # "BANAMEX": "asst_IwRnr13nxU1PQRqKPhuXnkhA",
     "BANAMEX": "asst_1M8w2HKrJqJdjkPji7eF7JJK",
-    "BANBAJIO": "asst_HFb4PfC3IuhImfaesLbDECso",
+    "BANBAJIO": "asst_YRhqGDSFvH8K5siImwzl32sx",
     "BANORTE": "asst_n4BnRdAVz8xYKZ7o47eur5XX",
     "BANREGIO": "asst_Ogn34gOlZI3VJ6GFpS218KTs",
-    "BBVA": "asst_RbZOEgD5GQBscV62qiR329eT",
+    "BBVA": "asst_Bmuha99CJW515evmB4vljYH7",
     "BX+": "asst_mLkxpzOSBF5YadZiiZhC4y3U",
     "CHASE": "asst_68agxxAZQii7q0vS5oKS4L1s",
     "HSBC": "asst_9Mzw7u5Z684PnipVujq1kNxa",
-    "SANTANDER": "asst_1KzdIHmIMalKqkGFIlD3uxqU",
-    "SCOTIABANK": "asst_dFXuIoZeyYjixPJVO5SNHx9X",
+    "SANTANDER": "asst_HOQwBr6KtWHAfv2JbrNySRN5",
+    "SCOTIABANK": "asst_6lN2cWBcCQ8RuiOqWWA7clgu"
 }
 
 run_finished_states = ["completed", "failed", "cancelled", "expired", "requires_action"]
