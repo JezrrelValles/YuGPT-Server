@@ -42,8 +42,8 @@ BANKS_TO_ASSISTANT_ID = {
     # "BANAMEX": "asst_IwRnr13nxU1PQRqKPhuXnkhA",
     "BANAMEX": "asst_1M8w2HKrJqJdjkPji7eF7JJK",
     "BANBAJIO": "asst_YRhqGDSFvH8K5siImwzl32sx",
-    "BANORTE": "asst_n4BnRdAVz8xYKZ7o47eur5XX",
-    "BANREGIO": "asst_Ogn34gOlZI3VJ6GFpS218KTs",
+    "BANORTE": "asst_dHWzuDg0D0rxyXGay3hC9uEM",
+    "BANREGIO": "asst_h9ScdBXkSI3V5yV7w1BTg7f5",
     "BBVA": "asst_Bmuha99CJW515evmB4vljYH7",
     "BX+": "asst_mLkxpzOSBF5YadZiiZhC4y3U",
     "CHASE": "asst_68agxxAZQii7q0vS5oKS4L1s",
@@ -141,7 +141,7 @@ async def convert_scanned_pdf_to_text(pdf_path):
         await mistral_client.files.delete_async(file_id=uploaded_pdf.id)
         
         #Create a .txt with the ocr text extracted
-        with open(datetime.datetime.now().strftime("%Y%m%d%H%M%S") + ".txt", "w") as file:
+        with open(datetime.datetime.now().strftime("%Y%m%d%H%M%S") + ".txt", "w", encoding="utf-8") as file:
             file.write(text)
             
         return text
