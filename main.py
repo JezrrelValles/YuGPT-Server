@@ -17,6 +17,7 @@ from bank_processors.bank_processor_factory import BankProcessorFactory
 from openpyxl import load_workbook
 from mistralai import Mistral
 import datetime
+import math
 
 app = FastAPI()
 load_dotenv()
@@ -160,7 +161,7 @@ async def extract_text_from_aux(file: UploadFile):
         # Rename columns manually
         df.columns = ["Fecha", "Referencia", "Cargos", "Abonos", "Saldo"]
 
-        saldo_inicial = df.iloc[1]["Saldo"]
+        saldo_inicial = df.iloc[0]["Saldo"]
 
         df_data = df.iloc[4:].reset_index(drop=True)
 
@@ -174,7 +175,7 @@ async def extract_text_from_aux(file: UploadFile):
 
         total_cargos = round(df_data["Cargos"].sum(), 2)
         total_abonos = round(df_data["Abonos"].sum(), 2)
-        total_saldo = round(saldo_inicial + (total_cargos - total_abonos), 2)
+        total_saldo = saldo_inicial + (total_cargos - total_abonos)
 
         # Convert data to JSON format
         extracted_text = {
@@ -202,6 +203,11 @@ async def extract_text_from_aux(file: UploadFile):
     except Exception as e:
         return {"error": f"Error processing the Excel file: {str(e)}"}
 
+def is_nan(value):
+    try:
+        return math.isnan(value)
+    except:
+        return False
 
 async def extract_text_from_previous(file: UploadFile):
     try:
@@ -210,35 +216,48 @@ async def extract_text_from_previous(file: UploadFile):
         previous_data = BytesIO(content)
         df = pd.read_excel(previous_data, header=None)
 
-        # Eliminar filas y columnas completamente vacías
-        df.dropna(how="all", inplace=True)
-        df.dropna(axis=1, how="all", inplace=True)
-
         # Convertir DataFrame a lista de listas
         data = df.values.tolist()
 
         # Extraer información clave
-        empresa = data[0][1] if len(data[0]) > 1 else None
-        mes = data[1][1] if len(data[1]) > 1 else None
-        cuenta = data[2][1] if len(data[2]) > 1 else None
+        empresa = data[0][2] if len(data[0]) > 1 else None
+        mes = data[1][2] if len(data[1]) > 1 else None
+        cuenta = data[2][2] if len(data[2]) > 1 else None
 
         saldo_contabilidad = (
-            data[3][-1] if isinstance(data[3][-1], (int, float)) else None
+            data[5][-1] if isinstance(data[5][-1], (int, float)) else None
         )
         saldo_estado_cuenta = (
-            data[7][-1] if isinstance(data[7][-1], (int, float)) else None
+            data[27][-1] if isinstance(data[27][-1], (int, float)) else None
         )
-        saldo_bancos = data[12][-1] if isinstance(data[12][-1], (int, float)) else None
-        diferencia = data[6][-1] if isinstance(data[6][-1], (int, float)) else None
+        saldo_bancos = data[46][-1] if isinstance(data[46][-1], (int, float)) else None
+        saldo_libros = data[24][-1] if isinstance(data[24][-1], (int, float)) else None
 
-        depositos = data[4][-1] if isinstance(data[4][-1], (int, float)) else None
-        retiros = data[5][-1] if isinstance(data[5][-1], (int, float)) else None
+        depositos = data[8][-1] if isinstance(data[8][-1], (int, float)) else None
+        retiros = data[16][-1] if isinstance(data[16][-1], (int, float)) else None
         depositos_en_transito = (
-            data[9][-1] if isinstance(data[9][-1], (int, float)) else None
+            data[30][-1] if isinstance(data[30][-1], (int, float)) else None
         )
         cheques_en_transito = (
-            data[10][-1] if isinstance(data[10][-1], (int, float)) else None
+            data[38][-1] if isinstance(data[38][-1], (int, float)) else None
         )
+        sobrante = data[47][-1] if isinstance(data[47][-1], (int, float)) else None
+
+        transacciones_depositos = [[item for item in data[i][0:7:2] if not is_nan(item)] 
+                    for i in range(9, 15)
+                ]
+        transacciones_retiros = [
+                    [item for item in data[i][0:7:2] if not is_nan(item)] 
+                    for i in range(17, 23)
+                ]
+        transacciones_depositos_en_transito = [
+                    [item for item in data[i][0:7:2] if not is_nan(item)] 
+                    for i in range(31, 37)
+                ]
+        transacciones_cheques_en_transito = [
+                    [item for item in data[i][0:7:2] if not is_nan(item)] 
+                    for i in range(39, 45)
+                ]
 
         # Construcción del diccionario final
         extracted_text = {
@@ -249,13 +268,24 @@ async def extract_text_from_previous(file: UploadFile):
                 "saldo_contabilidad": saldo_contabilidad,
                 "saldo_estado_cuenta": saldo_estado_cuenta,
                 "saldo_bancos": saldo_bancos,
-                "diferencia": diferencia,
+                "saldo_libros": saldo_libros,
+                "sobrante": sobrante,
             },
-            "transacciones": {
-                "depositos": depositos,
-                "retiros": retiros,
-                "depositos_en_transito": depositos_en_transito,
-                "cheques_en_transito": cheques_en_transito,
+            "depositos": {
+                "total": depositos,
+                "transacciones": transacciones_depositos,
+            },
+            "retiros": {
+                "total": retiros,
+                "transacciones": transacciones_retiros,
+            },
+            "depositos_en_transito": {
+                "total": depositos_en_transito,
+                "transacciones": transacciones_depositos_en_transito,
+            },
+            "cheques_en_transito": {
+                "total": cheques_en_transito,
+                "transacciones": transacciones_cheques_en_transito,
             },
         }
         print(extracted_text)
@@ -431,26 +461,26 @@ async def create_conciliation():
         saldo_aux = 10052.82
         total_depositos = 0
         total_retiros = 0
-        diferencia = (saldo_aux + total_depositos) - total_retiros
+        saldo_libros = (saldo_aux + total_depositos) - total_retiros
         saldo_edo_cuenta = 10052.82
         total_depositos_transito = 0
         total_cheques_transito = 0
         saldo_banco = (
             saldo_edo_cuenta + total_depositos_transito
         ) - total_cheques_transito
-        sobrante = diferencia - saldo_banco
+        sobrante = saldo_libros - saldo_banco
 
         hoja["H6"] = saldo_aux
         hoja["H9"] = total_depositos
         hoja["H17"] = total_retiros
-        hoja["H25"] = diferencia
+        hoja["H25"] = saldo_libros
         hoja["H28"] = saldo_edo_cuenta
         hoja["H31"] = total_depositos_transito
         hoja["H39"] = total_cheques_transito
         hoja["H47"] = saldo_banco
         hoja["H48"] = sobrante
 
-        nombre_archivo = "CONCILIACION_MARZO_2025.xlsx"
+        nombre_archivo = "conciliacion.xlsx"
         wb.save(nombre_archivo)
 
         # Devolver el archivo para descarga
