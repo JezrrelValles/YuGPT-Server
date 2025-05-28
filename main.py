@@ -1,18 +1,15 @@
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
 from openai import AsyncOpenAI, OpenAIError
 from openai.types.beta.threads.run import RequiredAction, LastError
-from openai.types.beta.threads.run_submit_tool_outputs_params import ToolOutput
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
-from pdfminer.high_level import extract_text_to_fp
-from io import BytesIO, StringIO
-from typing import List, Dict, Optional
+from io import BytesIO
+from typing import List, Optional
 import pandas as pd
 import asyncio
-import fitz
 from bank_processors.bank_processor_factory import BankProcessorFactory
 from openpyxl import load_workbook
 from mistralai import Mistral
@@ -40,7 +37,6 @@ mistral_client = Mistral(api_key=mistral_api_key)
 
 
 BANKS_TO_ASSISTANT_ID = {
-    # "BANAMEX": "asst_IwRnr13nxU1PQRqKPhuXnkhA",
     "BANAMEX": "asst_1M8w2HKrJqJdjkPji7eF7JJK",
     "BANBAJIO": "asst_YRhqGDSFvH8K5siImwzl32sx",
     "BANORTE": "asst_dHWzuDg0D0rxyXGay3hC9uEM",
@@ -99,10 +95,7 @@ def get_assistant_id(bank: str) -> str:
 
 
 async def convert_pdf_to_text(pdf_path, bank):
-    # output_buffer = BytesIO()
     with open(pdf_path, "rb") as pdf_file:
-        # extract_text_to_fp(pdf_file, output_buffer, output_type="tag")
-
         processor = BankProcessorFactory.get_processor(bank, pdf_file)
         process_data = processor.process()
         process_data = "\n".join(
@@ -110,7 +103,6 @@ async def convert_pdf_to_text(pdf_path, bank):
         )
 
     return process_data
-
 
 async def convert_scanned_pdf_to_text(pdf_path):
     try:
@@ -148,7 +140,6 @@ async def convert_scanned_pdf_to_text(pdf_path):
         return text
     except Exception as e:
         raise Exception(f"Error en convert_scanned_pdf_to_text: {str(e)}")
-
 
 async def extract_text_from_aux(file: UploadFile):
     try:
@@ -231,7 +222,7 @@ async def extract_text_from_previous(file: UploadFile):
             data[27][-1] if isinstance(data[27][-1], (int, float)) else None
         )
         saldo_bancos = data[46][-1] if isinstance(data[46][-1], (int, float)) else None
-        saldo_libros = data[24][-1] if isinstance(data[24][-1], (int, float)) else None
+        saldo_segun_contabilidad = data[24][-1] if isinstance(data[24][-1], (int, float)) else None
 
         depositos = data[8][-1] if isinstance(data[8][-1], (int, float)) else None
         retiros = data[16][-1] if isinstance(data[16][-1], (int, float)) else None
@@ -241,7 +232,7 @@ async def extract_text_from_previous(file: UploadFile):
         cheques_en_transito = (
             data[38][-1] if isinstance(data[38][-1], (int, float)) else None
         )
-        sobrante = data[47][-1] if isinstance(data[47][-1], (int, float)) else None
+        diferencia = data[47][-1] if isinstance(data[47][-1], (int, float)) else None
 
         transacciones_depositos = [[item for item in data[i][0:7:2] if not is_nan(item)] 
                     for i in range(9, 15)
@@ -266,10 +257,10 @@ async def extract_text_from_previous(file: UploadFile):
             "cuenta": cuenta,
             "saldos": {
                 "saldo_contabilidad": saldo_contabilidad,
+                "saldo_segun_contabilidad": saldo_segun_contabilidad,
                 "saldo_estado_cuenta": saldo_estado_cuenta,
                 "saldo_bancos": saldo_bancos,
-                "saldo_libros": saldo_libros,
-                "sobrante": sobrante,
+                "diferencia": diferencia,
             },
             "depositos": {
                 "total": depositos,
@@ -292,20 +283,6 @@ async def extract_text_from_previous(file: UploadFile):
         return extracted_text
     except Exception as e:
         return {"error": f"Error processing the Excel file: {str(e)}"}
-
-
-async def extract_text_from_csv(file: UploadFile):
-    try:
-        content = await file.read()
-        decoded_content = content.decode("utf-8")
-        df = pd.read_csv(StringIO(decoded_content))
-
-        extracted_text = df.where(pd.notna(df), None).to_dict(orient="records")
-
-        return extracted_text
-    except Exception as e:
-        return {"error": f"Error al procesar el archivo Excel: {str(e)}"}
-
 
 async def wait_on_run(thread_id: str, run_id: str, polling_interval: int = 3):
     """
@@ -335,25 +312,8 @@ async def wait_on_run(thread_id: str, run_id: str, polling_interval: int = 3):
 
         await asyncio.sleep(polling_interval)
 
-
-@app.post("/extract_aux/")
-async def extract_aux(file: UploadFile = File(...)):
-    try:
-        text_data = await extract_text_from_aux(file)
-
-        if isinstance(text_data, dict) and "error" in text_data:
-            return JSONResponse(content=text_data, status_code=400)
-
-        return {"aux_transactions": text_data}
-    except Exception as e:
-        return JSONResponse(
-            content={"error": f"Error al procesar el archivo Excel: {str(e)}"},
-            status_code=500,
-        )
-
-
-@app.post("/extract_pdf/")
-async def extract_pdf(file: UploadFile = File(...), bank: str = Form(...)):
+@app.post("/extract_account/")
+async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
     assistant = get_assistant_id(bank)
     file_location = f"temp_{file.filename}"
 
@@ -386,6 +346,21 @@ async def extract_pdf(file: UploadFile = File(...), bank: str = Form(...)):
         if os.path.exists(file_location):
             os.remove(file_location)
 
+@app.post("/extract_aux/")
+async def extract_aux(file: UploadFile = File(...)):
+    try:
+        text_data = await extract_text_from_aux(file)
+
+        if isinstance(text_data, dict) and "error" in text_data:
+            return JSONResponse(content=text_data, status_code=400)
+
+        return {"aux_transactions": text_data}
+    except Exception as e:
+        return JSONResponse(
+            content={"error": f"Error al procesar el archivo Excel: {str(e)}"},
+            status_code=500,
+        )
+
 @app.post("/extract_previous/")
 async def extract_previous(file: UploadFile = File(...)):
     try:
@@ -400,7 +375,6 @@ async def extract_previous(file: UploadFile = File(...)):
             content={"error": f"Error al procesar el archivo Excel: {str(e)}"},
             status_code=500,
         )
-
 
 @app.post("/api/new")
 async def post_new(data: dict = Body(...)):
@@ -445,7 +419,6 @@ async def post_new(data: dict = Body(...)):
     except OpenAIError as e:
         raise HTTPException(status_code=500, detail=f"Error de OpenAI: {str(e)}")
 
-
 @app.post("/create_conciliation/")
 async def create_conciliation():
     try:
@@ -453,32 +426,32 @@ async def create_conciliation():
         wb = load_workbook(archivo_excel)
         hoja = wb.active
 
-        hoja["C1"] = "TEST"
-        hoja["C2"] = "MARZO 2025"
-        hoja["C3"] = "BANORTE 123"
-        hoja["B6"] = "SALDO EN CONTABILIDAD AL 31 DE MARZO 2025"
+        hoja["C1"] = "EVOLUCION MULTIMEDIA MEXICO S DE RL DE CV"
+        hoja["C2"] = "FEBRERO 2025"
+        hoja["C3"] = "BANBAJIO CTA: 90201"
+        hoja["B6"] = "SALDO EN CONTABILIDAD AL 28 DE FEBRERO 2025"
 
-        saldo_aux = 10052.82
+        saldo_contabilidad = 75372.25
         total_depositos = 0
         total_retiros = 0
-        saldo_libros = (saldo_aux + total_depositos) - total_retiros
-        saldo_edo_cuenta = 10052.82
+        saldo_segun_contabilidad = (saldo_contabilidad + total_depositos) - total_retiros
+        saldo_estado_cuenta = 76728.27
         total_depositos_transito = 0
-        total_cheques_transito = 0
-        saldo_banco = (
-            saldo_edo_cuenta + total_depositos_transito
+        total_cheques_transito = 1356.81 
+        saldo_bancos = (
+            saldo_estado_cuenta + total_depositos_transito
         ) - total_cheques_transito
-        sobrante = saldo_libros - saldo_banco
+        diferencia = saldo_segun_contabilidad - saldo_bancos
 
-        hoja["H6"] = saldo_aux
+        hoja["H6"] = saldo_contabilidad
         hoja["H9"] = total_depositos
         hoja["H17"] = total_retiros
-        hoja["H25"] = saldo_libros
-        hoja["H28"] = saldo_edo_cuenta
+        hoja["H25"] = saldo_segun_contabilidad
+        hoja["H28"] = saldo_estado_cuenta
         hoja["H31"] = total_depositos_transito
         hoja["H39"] = total_cheques_transito
-        hoja["H47"] = saldo_banco
-        hoja["H48"] = sobrante
+        hoja["H47"] = saldo_bancos
+        hoja["H48"] = diferencia
 
         nombre_archivo = "conciliacion.xlsx"
         wb.save(nombre_archivo)
@@ -494,7 +467,6 @@ async def create_conciliation():
         return JSONResponse(
             content={"error": f"Error al crear conciliación: {str(e)}"}, status_code=500
         )
-
 
 @app.post("/compare_transactions/")
 async def compare_transactions(request: CompareRequest):
@@ -587,55 +559,3 @@ async def compare_transactions(request: CompareRequest):
             content={"error": f"Error al comparar transacciones: {str(e)}"},
             status_code=500,
         )
-
-
-# @app.get("/api/threads/{thread_id}/runs/{run_id}")
-# async def get_run(thread_id: str, run_id: str):
-#     run = await client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
-
-#     return RunStatus(
-#         run_id=run.id,
-#         thread_id=thread_id,
-#         status=run.status,
-#         required_action=run.required_action,
-#         last_error=run.last_error,
-#     )
-
-
-# @app.get("/api/threads/{thread_id}")
-# async def get_thread(thread_id: str):
-#     messages = await client.beta.threads.messages.list(thread_id=thread_id)
-
-#     result = [
-#         ThreadMessage(
-#             content=message.content[0].text.value,
-#             role=message.role,
-#             hidden="type" in message.metadata and message.metadata["type"] == "hidden",
-#             id=message.id,
-#             created_at=message.created_at,
-#         )
-#         for message in messages.data
-#     ]
-
-#     return Thread(
-#         messages=result,
-#     )
-
-
-# @app.post("/api/threads/{thread_id}")
-# async def post_thread(thread_id: str, message: CreateMessage):
-#     await client.beta.threads.messages.create(
-#         thread_id=thread_id, content=message.content, role="user"
-#     )
-
-#     run = await client.beta.threads.runs.create(
-#         thread_id=thread_id, assistant_id=assistant_id
-#     )
-
-#     return RunStatus(
-#         run_id=run.id,
-#         thread_id=thread_id,
-#         status=run.status,
-#         required_action=run.required_action,
-#         last_error=run.last_error,
-#     )
