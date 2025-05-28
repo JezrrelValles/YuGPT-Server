@@ -20,10 +20,7 @@ app = FastAPI()
 load_dotenv()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://yu-gpt-server.vercel.app/",  # used to run with react server
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
