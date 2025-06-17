@@ -429,13 +429,13 @@ async def create_conciliation():
         hoja["C3"] = "BANBAJIO CTA: 90201"
         hoja["B6"] = "SALDO EN CONTABILIDAD AL 28 DE FEBRERO 2025"
 
-        saldo_contabilidad = 75372.25
+        saldo_contabilidad = 0 #75372.25
         total_depositos = 0
         total_retiros = 0
         saldo_segun_contabilidad = (saldo_contabilidad + total_depositos) - total_retiros
-        saldo_estado_cuenta = 76728.27
+        saldo_estado_cuenta = 0 #76728.27
         total_depositos_transito = 0
-        total_cheques_transito = 1356.81 
+        total_cheques_transito = 0 #1356.81 
         saldo_bancos = (
             saldo_estado_cuenta + total_depositos_transito
         ) - total_cheques_transito
