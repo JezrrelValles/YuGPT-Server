@@ -150,7 +150,7 @@ async def extract_text_from_aux(file: UploadFile):
         # Rename columns manually
         df.columns = ["Fecha", "Referencia", "Cargos", "Abonos", "Saldo"]
 
-        saldo_inicial = df.iloc[0]["Saldo"]
+        saldo_inicial = df.iloc[1]["Saldo"]
 
         df_data = df.iloc[4:].reset_index(drop=True)
 
