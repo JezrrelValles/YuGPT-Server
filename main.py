@@ -1,3 +1,4 @@
+from collections import Counter
 import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
@@ -7,14 +8,18 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from io import BytesIO
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import pandas as pd
 import asyncio
 from bank_processors.bank_processor_factory import BankProcessorFactory
 from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 from mistralai import Mistral
 import datetime
 import math
+import calendar
+from datetime import datetime
+import traceback
 
 app = FastAPI()
 load_dotenv()
@@ -33,6 +38,22 @@ client = AsyncOpenAI(
 mistral_api_key = os.getenv("MISTRAL_API")
 mistral_client = Mistral(api_key=mistral_api_key)
 
+MESES = {
+    "ENERO": 1,
+    "FEBRERO": 2,
+    "MARZO": 3,
+    "ABRIL": 4,
+    "MAYO": 5,
+    "JUNIO": 6,
+    "JULIO": 7,
+    "AGOSTO": 8,
+    "SEPTIEMBRE": 9,
+    "OCTUBRE": 10,
+    "NOVIEMBRE": 11,
+    "DICIEMBRE": 12,
+}
+
+MESES_REVERSO = {v: k for k, v in MESES.items()}
 
 BANKS_TO_ASSISTANT_ID = {
     "BANAMEX": "asst_1M8w2HKrJqJdjkPji7eF7JJK",
@@ -44,7 +65,7 @@ BANKS_TO_ASSISTANT_ID = {
     "CHASE": "asst_68agxxAZQii7q0vS5oKS4L1s",
     "HSBC": "asst_9Mzw7u5Z684PnipVujq1kNxa",
     "SANTANDER": "asst_HOQwBr6KtWHAfv2JbrNySRN5",
-    "SCOTIABANK": "asst_6lN2cWBcCQ8RuiOqWWA7clgu"
+    "SCOTIABANK": "asst_6lN2cWBcCQ8RuiOqWWA7clgu",
 }
 
 run_finished_states = ["completed", "failed", "cancelled", "expired", "requires_action"]
@@ -74,16 +95,119 @@ class CreateMessage(BaseModel):
     content: str
 
 
-class Transaction(BaseModel):
+class TransaccionGroup(BaseModel):
+    total: float
+    transacciones: List[List[float]]
+
+
+class Saldos(BaseModel):
+    saldo_contabilidad: float
+    saldo_libros: float
+    saldo_estado_cuenta: float
+    saldo_bancos: float
+    diferencia: float
+
+
+class PreviousConciliationResult(BaseModel):
+    empresa: str
+    mes: str
+    cuenta: str
+    saldos: Saldos
+    depositos: TransaccionGroup
+    retiros: TransaccionGroup
+    depositos_en_transito: TransaccionGroup
+    cheques_en_transito: TransaccionGroup
+
+
+class Movimiento(BaseModel):
     fecha: str
     tipo: str
     monto: float
     saldo: float
 
 
-class CompareRequest(BaseModel):
-    assistant_transactions: List[Transaction]
-    aux_transactions: List[Transaction]
+class AuxResult(BaseModel):
+    saldo_inicial: float
+    datos: List[Movimiento]
+    total_cargos: float
+    total_abonos: float
+    total_saldo: float
+
+
+class ConciliationRequest(BaseModel):
+    previousConciliationResult: PreviousConciliationResult
+    auxResult: AuxResult
+    assistantResult: List[Movimiento]
+
+
+def obtener_descripcion(prev_fecha_str):
+    mes_str, anio_str = prev_fecha_str.split()
+    mes = MESES.get(mes_str.upper())
+    anio = int(anio_str)
+
+    if mes == 12:
+        mes_siguiente = 1
+        anio += 1
+    else:
+        mes_siguiente = mes + 1
+
+    ultimo_dia = calendar.monthrange(anio, mes_siguiente)[1]
+
+    nombre_mes = MESES_REVERSO[mes_siguiente]
+
+    return f"SALDO EN CONTABILIDAD AL {ultimo_dia} DE {nombre_mes} DEL {anio}"
+
+
+def obtener_siguiente_fecha(prev_fecha_str):
+    mes_str, anio_str = prev_fecha_str.split()
+    mes = MESES.get(mes_str.upper())
+    anio = int(anio_str)
+
+    if mes == 12:
+        mes_siguiente = 1
+        anio_siguiente = anio + 1
+    else:
+        mes_siguiente = mes + 1
+        anio_siguiente = anio
+
+    nombre_mes = MESES_REVERSO[mes_siguiente]
+
+    return f"{nombre_mes} {anio_siguiente}"
+
+
+def comparar_transacciones(assistant: List[Movimiento], aux: AuxResult) -> Dict[str, Any]:
+    assistant_counts = Counter((item.monto, item.tipo) for item in assistant)
+    aux_counts = Counter((item.monto, item.tipo) for item in aux.datos)
+
+    match_transactions = {}
+    assistant_discrepancies = {}
+    aux_discrepancies = {}
+
+    for transaction, count in assistant_counts.items():
+        if transaction in aux_counts:
+            match_count = min(count, aux_counts[transaction])
+
+            if match_count > 0:
+                match_transactions[transaction] = match_count
+            
+            assistant_discrepancies[transaction] = count - match_count
+            aux_counts[transaction] -= match_count
+        else:
+            assistant_discrepancies[transaction] = count
+    
+    for transaction, count in aux_counts.items():
+            if count > 0:
+                aux_discrepancies[transaction] = count
+    
+    match_transactions = {k: v for k, v in match_transactions.items() if v > 0}
+    assistant_discrepancies = {k: v for k, v in assistant_discrepancies.items() if v > 0}
+    aux_discrepancies = {k: v for k, v in aux_discrepancies.items() if v > 0}
+
+    return {
+        "matches": dict(sorted(match_transactions.items())),
+        "assistant_discrepancies": dict(sorted(assistant_discrepancies.items())),
+        "aux_discrepancies": dict(sorted(aux_discrepancies.items())),
+    }
 
 
 def get_assistant_id(bank: str) -> str:
@@ -102,6 +226,7 @@ async def convert_pdf_to_text(pdf_path, bank):
 
     return process_data
 
+
 async def convert_scanned_pdf_to_text(pdf_path):
     try:
         with open(pdf_path, "rb") as file:
@@ -110,34 +235,36 @@ async def convert_scanned_pdf_to_text(pdf_path):
                     "file_name": pdf_path,
                     "content": file,
                 },
-                purpose="ocr"
+                purpose="ocr",
             )
 
         signed_url = mistral_client.files.get_signed_url(file_id=uploaded_pdf.id)
         print(signed_url)
-        ocr_response_pages =  mistral_client.ocr.process(
+        ocr_response_pages = mistral_client.ocr.process(
             model="mistral-ocr-latest",
-            document={
-                "type": "document_url",
-                "document_url": signed_url.url
-            }
+            document={"type": "document_url", "document_url": signed_url.url},
         ).pages
-        
+
         text = ""
         for page in ocr_response_pages:
             text += page.markdown + "\n"
-        
+
         print(f"Texto : {text}")
-        
+
         await mistral_client.files.delete_async(file_id=uploaded_pdf.id)
-        
-        #Create a .txt with the ocr text extracted
-        with open(datetime.datetime.now().strftime("%Y%m%d%H%M%S") + ".txt", "w", encoding="utf-8") as file:
+
+        # Create a .txt with the ocr text extracted
+        with open(
+            datetime.now().strftime("%Y%m%d%H%M%S") + ".txt",
+            "w",
+            encoding="utf-8",
+        ) as file:
             file.write(text)
-            
+
         return text
     except Exception as e:
         raise Exception(f"Error en convert_scanned_pdf_to_text: {str(e)}")
+
 
 async def extract_text_from_aux(file: UploadFile):
     try:
@@ -164,7 +291,7 @@ async def extract_text_from_aux(file: UploadFile):
 
         total_cargos = round(df_data["Cargos"].sum(), 2)
         total_abonos = round(df_data["Abonos"].sum(), 2)
-        total_saldo = saldo_inicial + (total_cargos - total_abonos)
+        total_saldo = round(saldo_inicial + (total_cargos - total_abonos), 2)
 
         # Convert data to JSON format
         extracted_text = {
@@ -192,11 +319,13 @@ async def extract_text_from_aux(file: UploadFile):
     except Exception as e:
         return {"error": f"Error processing the Excel file: {str(e)}"}
 
+
 def is_nan(value):
     try:
         return math.isnan(value)
     except:
         return False
+
 
 async def extract_text_from_previous(file: UploadFile):
     try:
@@ -220,7 +349,9 @@ async def extract_text_from_previous(file: UploadFile):
             data[27][-1] if isinstance(data[27][-1], (int, float)) else None
         )
         saldo_bancos = data[46][-1] if isinstance(data[46][-1], (int, float)) else None
-        saldo_segun_contabilidad = data[24][-1] if isinstance(data[24][-1], (int, float)) else None
+        saldo_libros = (
+            data[24][-1] if isinstance(data[24][-1], (int, float)) else None
+        )
 
         depositos = data[8][-1] if isinstance(data[8][-1], (int, float)) else None
         retiros = data[16][-1] if isinstance(data[16][-1], (int, float)) else None
@@ -232,21 +363,18 @@ async def extract_text_from_previous(file: UploadFile):
         )
         diferencia = data[47][-1] if isinstance(data[47][-1], (int, float)) else None
 
-        transacciones_depositos = [[item for item in data[i][0:7:2] if not is_nan(item)] 
-                    for i in range(9, 15)
-                ]
+        transacciones_depositos = [
+            [item for item in data[i][0:7:2] if not is_nan(item)] for i in range(9, 15)
+        ]
         transacciones_retiros = [
-                    [item for item in data[i][0:7:2] if not is_nan(item)] 
-                    for i in range(17, 23)
-                ]
+            [item for item in data[i][0:7:2] if not is_nan(item)] for i in range(17, 23)
+        ]
         transacciones_depositos_en_transito = [
-                    [item for item in data[i][0:7:2] if not is_nan(item)] 
-                    for i in range(31, 37)
-                ]
+            [item for item in data[i][0:7:2] if not is_nan(item)] for i in range(31, 37)
+        ]
         transacciones_cheques_en_transito = [
-                    [item for item in data[i][0:7:2] if not is_nan(item)] 
-                    for i in range(39, 45)
-                ]
+            [item for item in data[i][0:7:2] if not is_nan(item)] for i in range(39, 45)
+        ]
 
         # Construcción del diccionario final
         extracted_text = {
@@ -255,7 +383,7 @@ async def extract_text_from_previous(file: UploadFile):
             "cuenta": cuenta,
             "saldos": {
                 "saldo_contabilidad": saldo_contabilidad,
-                "saldo_segun_contabilidad": saldo_segun_contabilidad,
+                "saldo_libros": saldo_libros,
                 "saldo_estado_cuenta": saldo_estado_cuenta,
                 "saldo_bancos": saldo_bancos,
                 "diferencia": diferencia,
@@ -281,6 +409,7 @@ async def extract_text_from_previous(file: UploadFile):
         return extracted_text
     except Exception as e:
         return {"error": f"Error processing the Excel file: {str(e)}"}
+
 
 async def wait_on_run(thread_id: str, run_id: str, polling_interval: int = 3):
     """
@@ -310,6 +439,7 @@ async def wait_on_run(thread_id: str, run_id: str, polling_interval: int = 3):
 
         await asyncio.sleep(polling_interval)
 
+
 @app.post("/extract_account/")
 async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
     assistant = get_assistant_id(bank)
@@ -332,7 +462,7 @@ async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
                 print(f"Error en convert_scanned_pdf_to_text: {e}")
                 return JSONResponse(
                     content={"error": f"Error al procesar PDF: {str(e)}"},
-                    status_code=500
+                    status_code=500,
                 )
 
         return {
@@ -343,6 +473,7 @@ async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
     finally:
         if os.path.exists(file_location):
             os.remove(file_location)
+
 
 @app.post("/extract_aux/")
 async def extract_aux(file: UploadFile = File(...)):
@@ -359,6 +490,7 @@ async def extract_aux(file: UploadFile = File(...)):
             status_code=500,
         )
 
+
 @app.post("/extract_previous/")
 async def extract_previous(file: UploadFile = File(...)):
     try:
@@ -373,6 +505,7 @@ async def extract_previous(file: UploadFile = File(...)):
             content={"error": f"Error al procesar el archivo Excel: {str(e)}"},
             status_code=500,
         )
+
 
 @app.post("/api/new")
 async def post_new(data: dict = Body(...)):
@@ -417,39 +550,117 @@ async def post_new(data: dict = Body(...)):
     except OpenAIError as e:
         raise HTTPException(status_code=500, detail=f"Error de OpenAI: {str(e)}")
 
+
 @app.post("/create_conciliation/")
-async def create_conciliation():
+async def create_conciliation(data: ConciliationRequest):
+    yellowHighlighter = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+
     try:
+        prev = data.previousConciliationResult
+        aux = data.auxResult
+        assistant = data.assistantResult
+
+        # Prev
+        depositos_total = prev.depositos.total if prev.depositos.total > 0 else 0
+        retiros_total = prev.retiros.total if prev.retiros.total > 0 else 0
+        depositos_en_transito_total = (
+            prev.depositos_en_transito.total
+            if prev.depositos_en_transito.total > 0
+            else 0
+        )
+        cheques_en_transito_total = (
+            prev.cheques_en_transito.total if prev.cheques_en_transito.total > 0 else 0
+        )
+        
+        fecha_actual = obtener_siguiente_fecha(prev.mes)
+        descripcion = obtener_descripcion(prev.mes)
+
+        # Aux
+        aux_saldo_final = aux.total_saldo
+
+        # assistant vs aux
+        comparetive_assistant_aux = comparar_transacciones(assistant, aux)
+        print(comparetive_assistant_aux)
+
+        # Assistant
+        saldo_final = 0.0
+        if assistant: # Verifica si la lista no está vacía
+            # Buscamos el último elemento con TIPO "SALDO FINAL"
+            # Iteramos desde el final para encontrar el último "SALDO FINAL" eficientemente
+            for transaction in reversed(assistant):
+                if transaction.tipo == "saldo final" and transaction.saldo is not None:
+                    saldo_final = transaction.saldo
+                    break # Encontramos el último, salimos del bucle
+            # Si no se encontró "SALDO FINAL", saldo_final sigue siendo 0.0
+
         archivo_excel = "format.xlsx"
         wb = load_workbook(archivo_excel)
         hoja = wb.active
 
-        hoja["C1"] = "EVOLUCION MULTIMEDIA MEXICO S DE RL DE CV"
-        hoja["C2"] = "FEBRERO 2025"
-        hoja["C3"] = "BANBAJIO CTA: 90201"
-        hoja["B6"] = "SALDO EN CONTABILIDAD AL 28 DE FEBRERO 2025"
+        hoja["C1"] = prev.empresa  # empresa
+        hoja["C2"] = fecha_actual  # mes
+        hoja["C3"] = prev.cuenta  # cuenta
+        hoja["B6"] = descripcion
 
-        saldo_contabilidad = 0 #75372.25
-        total_depositos = 0
-        total_retiros = 0
-        saldo_segun_contabilidad = (saldo_contabilidad + total_depositos) - total_retiros
-        saldo_estado_cuenta = 0 #76728.27
-        total_depositos_transito = 0
-        total_cheques_transito = 0 #1356.81 
+        saldo_contabilidad = aux_saldo_final
+        total_depositos = depositos_total
+        total_retiros = retiros_total
+        saldo_libros = (
+            saldo_contabilidad + total_depositos
+        ) - total_retiros
+        saldo_estado_cuenta = saldo_final
+        total_depositos_transito = depositos_en_transito_total
+        total_cheques_transito = cheques_en_transito_total
         saldo_bancos = (
             saldo_estado_cuenta + total_depositos_transito
         ) - total_cheques_transito
-        diferencia = saldo_segun_contabilidad - saldo_bancos
+        diferencia = saldo_libros - saldo_bancos
 
         hoja["H6"] = saldo_contabilidad
-        hoja["H9"] = total_depositos
-        hoja["H17"] = total_retiros
-        hoja["H25"] = saldo_segun_contabilidad
+        # hoja["H9"] = total_depositos
+        # hoja["H17"] = total_retiros
+        # hoja["H25"] = saldo_libros
         hoja["H28"] = saldo_estado_cuenta
-        hoja["H31"] = total_depositos_transito
-        hoja["H39"] = total_cheques_transito
-        hoja["H47"] = saldo_bancos
-        hoja["H48"] = diferencia
+        # hoja["H31"] = total_depositos_transito
+        # hoja["H39"] = total_cheques_transito
+        # hoja["H47"] = saldo_bancos
+        # hoja["H48"] = diferencia
+        
+        aux_discrepancy_rows = {
+            'deposito': {'col': ['A', 'C', 'E', 'G'], 'row_start': 10, 'index': 0},
+            'retiro': {'col': ['A', 'C', 'E', 'G'], 'row_start': 18, 'index': 0}
+        }
+
+        for (monto, tipo), count in comparetive_assistant_aux['aux_discrepancies'].items():
+            if tipo in aux_discrepancy_rows:
+                info = aux_discrepancy_rows[tipo]
+                for _ in range(count):
+                    col_index = info['index'] // 6
+                    row_offset = info['index'] % 6
+                
+                if col_index < len(info['col']):
+                    cell = f"{info['col'][col_index]}{info['row_start'] + row_offset}"
+                    hoja[cell] = monto
+                    hoja[cell].fill = yellowHighlighter
+                    info['index'] += 1
+                    
+        assistant_discrepancy_rows = {
+            'deposito': {'col': ['A', 'C', 'E', 'G'], 'row_start': 32, 'index': 0},
+            'retiro': {'col': ['A', 'C', 'E', 'G'], 'row_start': 40, 'index': 0}
+        }
+
+        for (monto, tipo), count in comparetive_assistant_aux['assistant_discrepancies'].items():
+            if tipo in assistant_discrepancy_rows:
+                info = assistant_discrepancy_rows[tipo]
+                for _ in range(count):
+                    col_index = info['index'] // 6
+                    row_offset = info['index'] % 6
+                    
+                    if col_index < len(info['col']):
+                        cell = f"{info['col'][col_index]}{info['row_start'] + row_offset}"
+                        hoja[cell] = monto
+                        hoja[cell].fill = yellowHighlighter
+                        info['index'] += 1
 
         nombre_archivo = "conciliacion.xlsx"
         wb.save(nombre_archivo)
@@ -462,98 +673,8 @@ async def create_conciliation():
         )
 
     except Exception as e:
+        tb_str = traceback.format_exc()
+
         return JSONResponse(
-            content={"error": f"Error al crear conciliación: {str(e)}"}, status_code=500
-        )
-
-@app.post("/compare_transactions/")
-async def compare_transactions(request: CompareRequest):
-    try:
-        # Normalizar transacciones del PDF
-        normalized_assistant_transactions = [
-            {
-                "fecha": t.fecha.upper(),
-                "tipo": t.tipo.lower(),
-                "monto": t.monto,
-                "saldo": t.saldo,
-            }
-            for t in request.assistant_transactions
-        ]
-
-        # Normalizar transacciones del CSV
-        normalized_aux_transactions = []
-        for t in request.aux_transactions:
-            if t.Fecha is None:  # Ignorar filas sin fecha (por ejemplo, la fila TOTAL)
-                continue
-            monto = 0.0
-            tipo = ""
-            if t.Abonos:
-                monto = float(t.Abonos.replace(",", ""))
-                tipo = "deposito"
-            elif t.Cargos:
-                monto = float(t.Cargos.replace(",", ""))
-                tipo = "retiro"
-            saldo = float(t.Saldo.replace(",", ""))
-            normalized_aux_transactions.append(
-                {
-                    "fecha": t.Fecha.upper(),
-                    "tipo": tipo,
-                    "monto": monto,
-                    "saldo": saldo,
-                }
-            )
-
-        # Comparar transacciones
-        discrepancies = []
-        for pdf_txn in normalized_assistant_transactions:
-            csv_txn = next(
-                (
-                    t
-                    for t in normalized_aux_transactions
-                    if t["fecha"] == pdf_txn["fecha"] and t["tipo"] == pdf_txn["tipo"]
-                ),
-                None,
-            )
-            if not csv_txn:
-                discrepancies.append(
-                    {
-                        "type": "Falta en CSV",
-                        "transaction": pdf_txn,
-                    }
-                )
-            elif (
-                csv_txn["monto"] != pdf_txn["monto"]
-                or csv_txn["saldo"] != pdf_txn["saldo"]
-            ):
-                discrepancies.append(
-                    {
-                        "type": "Discrepancia en monto/saldo",
-                        "assistant_transaction": pdf_txn,
-                        "aux_transaction": csv_txn,
-                    }
-                )
-
-        # Verificar transacciones en el CSV que no están en el PDF
-        for csv_txn in normalized_aux_transactions:
-            pdf_txn = next(
-                (
-                    t
-                    for t in normalized_assistant_transactions
-                    if t["fecha"] == csv_txn["fecha"] and t["tipo"] == csv_txn["tipo"]
-                ),
-                None,
-            )
-            if not pdf_txn:
-                discrepancies.append(
-                    {
-                        "type": "Falta en PDF",
-                        "transaction": csv_txn,
-                    }
-                )
-
-        return {"discrepancies": discrepancies}
-    except Exception as e:
-        return JSONResponse(
-            content={"error": f"Error al comparar transacciones: {str(e)}"},
-            status_code=500,
+            content={"error": f"Error al crear conciliación: {tb_str}"}, status_code=500
         )

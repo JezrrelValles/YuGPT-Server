@@ -1,7 +1,7 @@
 annotated-types==0.7.0
 anyio==4.9.0
 asyncio==3.4.3
-bank_parser_py @ git+https://github.com/AdrianRvzz/bank_parser_py.git
+bank_parser_py @ git+https://github.com/JezrrelValles/bank_parser_py.git
 certifi==2025.1.31
 cffi==1.17.1
 charset-normalizer==3.4.0
