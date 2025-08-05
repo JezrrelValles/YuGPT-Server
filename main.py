@@ -582,16 +582,27 @@ async def create_conciliation(data: ConciliationRequest):
         comparetive_assistant_aux = comparar_transacciones(assistant, aux)
         print(comparetive_assistant_aux)
 
-        # Assistant
         saldo_final = 0.0
-        if assistant: # Verifica si la lista no está vacía
+        penultimo_saldo = 0.0
+        encontrado_saldo_final = False
+
+        if assistant:  # Verifica si la lista no está vacía
             # Buscamos el último elemento con TIPO "SALDO FINAL"
             # Iteramos desde el final para encontrar el último "SALDO FINAL" eficientemente
             for transaction in reversed(assistant):
                 if transaction.tipo == "saldo final" and transaction.saldo is not None:
-                    saldo_final = transaction.saldo
-                    break # Encontramos el último, salimos del bucle
-            # Si no se encontró "SALDO FINAL", saldo_final sigue siendo 0.0
+                    # Si aún no hemos encontrado el último saldo, lo asignamos y marcamos
+                    if not encontrado_saldo_final:
+                        saldo_final = transaction.saldo
+                        encontrado_saldo_final = True
+                    # Si ya encontramos el último y el saldo_final es 0, asignamos el siguiente
+                    elif saldo_final == 0.0:
+                        penultimo_saldo = transaction.saldo
+                        break  # Encontramos el penúltimo, salimos del bucle
+            
+            # Si el saldo final es 0, usamos el penúltimo como referencia
+            if saldo_final == 0.0 and penultimo_saldo != 0.0:
+                saldo_final = penultimo_saldo
 
         archivo_excel = "format.xlsx"
         wb = load_workbook(archivo_excel)
