@@ -636,28 +636,10 @@ async def create_conciliation(data: ConciliationRequest):
         # hoja["H39"] = total_cheques_transito
         # hoja["H47"] = saldo_bancos
         # hoja["H48"] = diferencia
-        
-        aux_discrepancy_rows = {
-            'deposito': {'col': ['A', 'C', 'E', 'G'], 'row_start': 10, 'index': 0},
-            'retiro': {'col': ['A', 'C', 'E', 'G'], 'row_start': 18, 'index': 0}
-        }
-
-        for (monto, tipo), count in comparetive_assistant_aux['aux_discrepancies'].items():
-            if tipo in aux_discrepancy_rows:
-                info = aux_discrepancy_rows[tipo]
-                for _ in range(count):
-                    col_index = info['index'] // 6
-                    row_offset = info['index'] % 6
-                
-                if col_index < len(info['col']):
-                    cell = f"{info['col'][col_index]}{info['row_start'] + row_offset}"
-                    hoja[cell] = monto
-                    hoja[cell].fill = yellowHighlighter
-                    info['index'] += 1
                     
         assistant_discrepancy_rows = {
-            'deposito': {'col': ['A', 'C', 'E', 'G'], 'row_start': 32, 'index': 0},
-            'retiro': {'col': ['A', 'C', 'E', 'G'], 'row_start': 40, 'index': 0}
+            'deposito': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O'], 'row_start': 10, 'index': 0},
+            'retiro': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O'], 'row_start': 18, 'index': 0}
         }
 
         for (monto, tipo), count in comparetive_assistant_aux['assistant_discrepancies'].items():
@@ -672,6 +654,24 @@ async def create_conciliation(data: ConciliationRequest):
                         hoja[cell] = monto
                         hoja[cell].fill = yellowHighlighter
                         info['index'] += 1
+
+        aux_discrepancy_rows = {
+            'deposito': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O'], 'row_start': 32, 'index': 0},
+            'retiro': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O'], 'row_start': 40, 'index': 0}
+        }
+
+        for (monto, tipo), count in comparetive_assistant_aux['aux_discrepancies'].items():
+            if tipo in aux_discrepancy_rows:
+                info = aux_discrepancy_rows[tipo]
+                for _ in range(count):
+                    col_index = info['index'] // 6
+                    row_offset = info['index'] % 6
+                
+                if col_index < len(info['col']):
+                    cell = f"{info['col'][col_index]}{info['row_start'] + row_offset}"
+                    hoja[cell] = monto
+                    hoja[cell].fill = yellowHighlighter
+                    info['index'] += 1
 
         nombre_archivo = "conciliacion.xlsx"
         wb.save(nombre_archivo)
