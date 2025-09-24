@@ -587,19 +587,19 @@ async def create_conciliation(data: ConciliationRequest):
         encontrado_saldo_final = False
 
         if assistant:  # Verifica si la lista no está vacía
-            # Buscamos el último elemento con TIPO "SALDO FINAL"
-            # Iteramos desde el final para encontrar el último "SALDO FINAL" eficientemente
+            encontrado_saldo_final = False
+            saldo_final = 0.0
+            penultimo_saldo = 0.0
+
+            # Iteramos desde el final para encontrar el último movimiento
             for transaction in reversed(assistant):
-                if transaction.tipo == "saldo final" and transaction.saldo is not None:
-                    # Si aún no hemos encontrado el último saldo, lo asignamos y marcamos
-                    if not encontrado_saldo_final:
-                        saldo_final = transaction.saldo
-                        encontrado_saldo_final = True
-                    # Si ya encontramos el último y el saldo_final es 0, asignamos el siguiente
-                    elif saldo_final == 0.0:
-                        penultimo_saldo = transaction.saldo
-                        break  # Encontramos el penúltimo, salimos del bucle
-            
+                if not encontrado_saldo_final:
+                    saldo_final = transaction.saldo
+                    encontrado_saldo_final = True
+                elif saldo_final == 0.0:
+                    penultimo_saldo = transaction.saldo
+                    break  # Encontramos el penúltimo, salimos del bucle
+
             # Si el saldo final es 0, usamos el penúltimo como referencia
             if saldo_final == 0.0 and penultimo_saldo != 0.0:
                 saldo_final = penultimo_saldo
@@ -638,8 +638,8 @@ async def create_conciliation(data: ConciliationRequest):
         # hoja["H48"] = diferencia
                     
         assistant_discrepancy_rows = {
-            'deposito': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O'], 'row_start': 10, 'index': 0},
-            'retiro': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O'], 'row_start': 18, 'index': 0}
+            'deposito': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'], 'row_start': 10, 'index': 0},
+            'retiro': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'], 'row_start': 18, 'index': 0}
         }
 
         for (monto, tipo), count in comparetive_assistant_aux['assistant_discrepancies'].items():
@@ -656,8 +656,8 @@ async def create_conciliation(data: ConciliationRequest):
                         info['index'] += 1
 
         aux_discrepancy_rows = {
-            'deposito': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O'], 'row_start': 32, 'index': 0},
-            'retiro': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O'], 'row_start': 40, 'index': 0}
+            'deposito': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'], 'row_start': 32, 'index': 0},
+            'retiro': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'], 'row_start': 40, 'index': 0}
         }
 
         for (monto, tipo), count in comparetive_assistant_aux['aux_discrepancies'].items():
