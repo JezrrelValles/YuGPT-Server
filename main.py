@@ -125,6 +125,10 @@ class Movimiento(BaseModel):
     monto: float
     saldo: float
 
+class MovimientoPrev(BaseModel):
+    monto: float
+    tipo: str
+
 
 class AuxResult(BaseModel):
     saldo_inicial: float
@@ -158,24 +162,24 @@ def obtener_descripcion(prev_fecha_str):
     return f"SALDO EN CONTABILIDAD AL {ultimo_dia} DE {nombre_mes} DEL {anio}"
 
 
-def extraer_movimientos_conciliacion(prev) -> List[Movimiento]:
+def extraer_movimientos_conciliacion(prev) -> List[MovimientoPrev]:
     movimientos = []
 
     for lista in prev.depositos.transacciones:
         for monto in lista:
-            movimientos.append(Movimiento(monto=monto, tipo="deposito"))
+            movimientos.append(MovimientoPrev(monto=monto, tipo="deposito"))
 
     for lista in prev.retiros.transacciones:
         for monto in lista:
-            movimientos.append(Movimiento(monto=monto, tipo="retiro"))
+            movimientos.append(MovimientoPrev(monto=monto, tipo="retiro"))
 
     for lista in prev.depositos_en_transito.transacciones:
         for monto in lista:
-            movimientos.append(Movimiento(monto=monto, tipo="deposito"))
+            movimientos.append(MovimientoPrev(monto=monto, tipo="deposito"))
 
     for lista in prev.cheques_en_transito.transacciones:
         for monto in lista:
-            movimientos.append(Movimiento(monto=monto, tipo="retiro"))
+            movimientos.append(MovimientoPrev(monto=monto, tipo="retiro"))
 
     return movimientos
 
@@ -198,7 +202,7 @@ def obtener_siguiente_fecha(prev_fecha_str):
 
 
 def comparar_transacciones(
-    assistant: List[Movimiento], aux: AuxResult, prev_movimientos: List[Movimiento]
+    assistant: List[Movimiento], aux: AuxResult, prev_movimientos: List[MovimientoPrev]
 ) -> Dict[str, Any]:
     assistant_counts = Counter((item.monto, item.tipo) for item in assistant)
     aux_counts = Counter((item.monto, item.tipo) for item in aux.datos)
