@@ -158,6 +158,28 @@ def obtener_descripcion(prev_fecha_str):
     return f"SALDO EN CONTABILIDAD AL {ultimo_dia} DE {nombre_mes} DEL {anio}"
 
 
+def extraer_movimientos_conciliacion(prev) -> List[Movimiento]:
+    movimientos = []
+
+    for lista in prev.depositos["transacciones"]:
+        for monto in lista:
+            movimientos.append(Movimiento(monto=monto, tipo="deposito"))
+
+    for lista in prev.retiros["transacciones"]:
+        for monto in lista:
+            movimientos.append(Movimiento(monto=monto, tipo="retiro"))
+
+    for lista in prev.depositos_en_transito["transacciones"]:
+        for monto in lista:
+            movimientos.append(Movimiento(monto=monto, tipo="deposito"))
+
+    for lista in prev.cheques_en_transito["transacciones"]:
+        for monto in lista:
+            movimientos.append(Movimiento(monto=monto, tipo="retiro"))
+
+    return movimientos
+
+
 def obtener_siguiente_fecha(prev_fecha_str):
     mes_str, anio_str = prev_fecha_str.split()
     mes = MESES.get(mes_str.upper())
@@ -175,13 +197,17 @@ def obtener_siguiente_fecha(prev_fecha_str):
     return f"{nombre_mes} {anio_siguiente}"
 
 
-def comparar_transacciones(assistant: List[Movimiento], aux: AuxResult) -> Dict[str, Any]:
+def comparar_transacciones(
+    assistant: List[Movimiento], aux: AuxResult, prev_movimientos: List[Movimiento]
+) -> Dict[str, Any]:
     assistant_counts = Counter((item.monto, item.tipo) for item in assistant)
     aux_counts = Counter((item.monto, item.tipo) for item in aux.datos)
+    prev_counts = Counter((item.monto, item.tipo) for item in prev_movimientos)
 
     match_transactions = {}
     assistant_discrepancies = {}
     aux_discrepancies = {}
+    prev_discrepancies = {}
 
     for transaction, count in assistant_counts.items():
         if transaction in aux_counts:
@@ -189,24 +215,42 @@ def comparar_transacciones(assistant: List[Movimiento], aux: AuxResult) -> Dict[
 
             if match_count > 0:
                 match_transactions[transaction] = match_count
-            
+
             assistant_discrepancies[transaction] = count - match_count
             aux_counts[transaction] -= match_count
         else:
             assistant_discrepancies[transaction] = count
-    
+
     for transaction, count in aux_counts.items():
-            if count > 0:
-                aux_discrepancies[transaction] = count
-    
+        if count > 0:
+            aux_discrepancies[transaction] = count
+
+    for transaction, count in prev_counts.items():
+        if transaction in assistant_discrepancies:
+            match_count = min(count, assistant_discrepancies[transaction])
+            if match_count > 0:
+                match_transactions[transaction] = (
+                    match_transactions.get(transaction, 0) + match_count
+                )
+                assistant_discrepancies[transaction] -= match_count
+                prev_counts[transaction] -= match_count
+
+    for transaction, count in prev_counts.items():
+        if count > 0:
+            prev_discrepancies[transaction] = count
+
     match_transactions = {k: v for k, v in match_transactions.items() if v > 0}
-    assistant_discrepancies = {k: v for k, v in assistant_discrepancies.items() if v > 0}
+    assistant_discrepancies = {
+        k: v for k, v in assistant_discrepancies.items() if v > 0
+    }
     aux_discrepancies = {k: v for k, v in aux_discrepancies.items() if v > 0}
+    prev_discrepancies = {k: v for k, v in prev_discrepancies.items() if v > 0}
 
     return {
         "matches": dict(sorted(match_transactions.items())),
         "assistant_discrepancies": dict(sorted(assistant_discrepancies.items())),
         "aux_discrepancies": dict(sorted(aux_discrepancies.items())),
+        "prev_discrepancies": dict(sorted(prev_discrepancies.items())),
     }
 
 
@@ -349,9 +393,7 @@ async def extract_text_from_previous(file: UploadFile):
             data[27][-1] if isinstance(data[27][-1], (int, float)) else None
         )
         saldo_bancos = data[46][-1] if isinstance(data[46][-1], (int, float)) else None
-        saldo_libros = (
-            data[24][-1] if isinstance(data[24][-1], (int, float)) else None
-        )
+        saldo_libros = data[24][-1] if isinstance(data[24][-1], (int, float)) else None
 
         depositos = data[8][-1] if isinstance(data[8][-1], (int, float)) else None
         retiros = data[16][-1] if isinstance(data[16][-1], (int, float)) else None
@@ -553,12 +595,19 @@ async def post_new(data: dict = Body(...)):
 
 @app.post("/create_conciliation/")
 async def create_conciliation(data: ConciliationRequest):
-    yellowHighlighter = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+    yellowHighlighter = PatternFill(
+        start_color="FFFF00", end_color="FFFF00", fill_type="solid"
+    )
+    orangeHighlighter = PatternFill(
+        start_color="FFA500", end_color="FFA500", fill_type="solid"
+    )
 
     try:
         prev = data.previousConciliationResult
         aux = data.auxResult
         assistant = data.assistantResult
+
+        prev_movimientos = extraer_movimientos_conciliacion(prev)
 
         # Prev
         depositos_total = prev.depositos.total if prev.depositos.total > 0 else 0
@@ -571,7 +620,7 @@ async def create_conciliation(data: ConciliationRequest):
         cheques_en_transito_total = (
             prev.cheques_en_transito.total if prev.cheques_en_transito.total > 0 else 0
         )
-        
+
         fecha_actual = obtener_siguiente_fecha(prev.mes)
         descripcion = obtener_descripcion(prev.mes)
 
@@ -579,8 +628,10 @@ async def create_conciliation(data: ConciliationRequest):
         aux_saldo_final = aux.total_saldo
 
         # assistant vs aux
-        comparetive_assistant_aux = comparar_transacciones(assistant, aux)
-        print(comparetive_assistant_aux)
+        comparetive_assistant_aux_conciliation = comparar_transacciones(
+            assistant, aux, prev_movimientos
+        )
+        print(comparetive_assistant_aux_conciliation)
 
         saldo_final = 0.0
         penultimo_saldo = 0.0
@@ -616,9 +667,7 @@ async def create_conciliation(data: ConciliationRequest):
         saldo_contabilidad = aux_saldo_final
         total_depositos = depositos_total
         total_retiros = retiros_total
-        saldo_libros = (
-            saldo_contabilidad + total_depositos
-        ) - total_retiros
+        saldo_libros = (saldo_contabilidad + total_depositos) - total_retiros
         saldo_estado_cuenta = saldo_final
         total_depositos_transito = depositos_en_transito_total
         total_cheques_transito = cheques_en_transito_total
@@ -636,42 +685,204 @@ async def create_conciliation(data: ConciliationRequest):
         # hoja["H39"] = total_cheques_transito
         # hoja["H47"] = saldo_bancos
         # hoja["H48"] = diferencia
-                    
+
         assistant_discrepancy_rows = {
-            'deposito': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'], 'row_start': 10, 'index': 0},
-            'retiro': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'], 'row_start': 18, 'index': 0}
+            "deposito": {
+                "col": [
+                    "A",
+                    "B",
+                    "C",
+                    "D",
+                    "E",
+                    "F",
+                    "G",
+                    "I",
+                    "J",
+                    "K",
+                    "L",
+                    "M",
+                    "N",
+                    "O",
+                    "P",
+                    "Q",
+                    "R",
+                    "S",
+                    "T",
+                    "U",
+                    "V",
+                    "W",
+                    "X",
+                    "Y",
+                    "Z",
+                ],
+                "row_start": 10,
+                "index": 0,
+            },
+            "retiro": {
+                "col": [
+                    "A",
+                    "B",
+                    "C",
+                    "D",
+                    "E",
+                    "F",
+                    "G",
+                    "I",
+                    "J",
+                    "K",
+                    "L",
+                    "M",
+                    "N",
+                    "O",
+                    "P",
+                    "Q",
+                    "R",
+                    "S",
+                    "T",
+                    "U",
+                    "V",
+                    "W",
+                    "X",
+                    "Y",
+                    "Z",
+                ],
+                "row_start": 18,
+                "index": 0,
+            },
         }
 
-        for (monto, tipo), count in comparetive_assistant_aux['assistant_discrepancies'].items():
+        for (monto, tipo), count in comparetive_assistant_aux_conciliation[
+            "assistant_discrepancies"
+        ].items():
             if tipo in assistant_discrepancy_rows:
                 info = assistant_discrepancy_rows[tipo]
                 for _ in range(count):
-                    col_index = info['index'] // 6
-                    row_offset = info['index'] % 6
-                    
-                    if col_index < len(info['col']):
-                        cell = f"{info['col'][col_index]}{info['row_start'] + row_offset}"
+                    col_index = info["index"] // 6
+                    row_offset = info["index"] % 6
+
+                    if col_index < len(info["col"]):
+                        cell = (
+                            f"{info['col'][col_index]}{info['row_start'] + row_offset}"
+                        )
                         hoja[cell] = monto
                         hoja[cell].fill = yellowHighlighter
-                        info['index'] += 1
+                        info["index"] += 1
+
+        # Previos pendientes (naranja, mismas filas que assistant)
+        for (monto, tipo), count in comparetive_assistant_aux_conciliation[
+            "prev_discrepancies"
+        ].items():
+            if tipo in assistant_discrepancy_rows:
+                info = assistant_discrepancy_rows[tipo]
+                for _ in range(count):
+                    col_index = info["index"] // 6
+                    row_offset = info["index"] % 6
+
+                    if col_index < len(info["col"]):
+                        cell = (
+                            f"{info['col'][col_index]}{info['row_start'] + row_offset}"
+                        )
+                        hoja[cell] = monto
+                        hoja[cell].fill = orangeHighlighter
+                        info["index"] += 1
 
         aux_discrepancy_rows = {
-            'deposito': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'], 'row_start': 32, 'index': 0},
-            'retiro': {'col': ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'], 'row_start': 40, 'index': 0}
+            "deposito": {
+                "col": [
+                    "A",
+                    "B",
+                    "C",
+                    "D",
+                    "E",
+                    "F",
+                    "G",
+                    "I",
+                    "J",
+                    "K",
+                    "L",
+                    "M",
+                    "N",
+                    "O",
+                    "P",
+                    "Q",
+                    "R",
+                    "S",
+                    "T",
+                    "U",
+                    "V",
+                    "W",
+                    "X",
+                    "Y",
+                    "Z",
+                ],
+                "row_start": 32,
+                "index": 0,
+            },
+            "retiro": {
+                "col": [
+                    "A",
+                    "B",
+                    "C",
+                    "D",
+                    "E",
+                    "F",
+                    "G",
+                    "I",
+                    "J",
+                    "K",
+                    "L",
+                    "M",
+                    "N",
+                    "O",
+                    "P",
+                    "Q",
+                    "R",
+                    "S",
+                    "T",
+                    "U",
+                    "V",
+                    "W",
+                    "X",
+                    "Y",
+                    "Z",
+                ],
+                "row_start": 40,
+                "index": 0,
+            },
         }
 
-        for (monto, tipo), count in comparetive_assistant_aux['aux_discrepancies'].items():
+        for (monto, tipo), count in comparetive_assistant_aux_conciliation[
+            "aux_discrepancies"
+        ].items():
             if tipo in aux_discrepancy_rows:
                 info = aux_discrepancy_rows[tipo]
                 for _ in range(count):
-                    col_index = info['index'] // 6
-                    row_offset = info['index'] % 6
-                
-                if col_index < len(info['col']):
+                    col_index = info["index"] // 6
+                    row_offset = info["index"] % 6
+
+                if col_index < len(info["col"]):
                     cell = f"{info['col'][col_index]}{info['row_start'] + row_offset}"
                     hoja[cell] = monto
                     hoja[cell].fill = yellowHighlighter
-                    info['index'] += 1
+                    info["index"] += 1
+
+            # Previos pendientes (naranja, mismas filas que assistant)
+        for (monto, tipo), count in comparetive_assistant_aux_conciliation[
+            "prev_discrepancies"
+        ].items():
+            if tipo in aux_discrepancy_rows:
+                info = aux_discrepancy_rows[tipo]
+                for _ in range(count):
+                    col_index = info["index"] // 6
+                    row_offset = info["index"] % 6
+
+                    if col_index < len(info["col"]):
+                        cell = (
+                            f"{info['col'][col_index]}{info['row_start'] + row_offset}"
+                        )
+                        hoja[cell] = monto
+                        hoja[cell].fill = orangeHighlighter
+                        info["index"] += 1
 
         nombre_archivo = "conciliacion.xlsx"
         wb.save(nombre_archivo)
