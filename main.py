@@ -161,19 +161,19 @@ def obtener_descripcion(prev_fecha_str):
 def extraer_movimientos_conciliacion(prev) -> List[Movimiento]:
     movimientos = []
 
-    for lista in prev.depositos["transacciones"]:
+    for lista in prev.depositos.transacciones:
         for monto in lista:
             movimientos.append(Movimiento(monto=monto, tipo="deposito"))
 
-    for lista in prev.retiros["transacciones"]:
+    for lista in prev.retiros.transacciones:
         for monto in lista:
             movimientos.append(Movimiento(monto=monto, tipo="retiro"))
 
-    for lista in prev.depositos_en_transito["transacciones"]:
+    for lista in prev.depositos_en_transito.transacciones:
         for monto in lista:
             movimientos.append(Movimiento(monto=monto, tipo="deposito"))
 
-    for lista in prev.cheques_en_transito["transacciones"]:
+    for lista in prev.cheques_en_transito.transacciones:
         for monto in lista:
             movimientos.append(Movimiento(monto=monto, tipo="retiro"))
 
