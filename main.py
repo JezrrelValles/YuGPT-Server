@@ -32,10 +32,10 @@ app.add_middleware(
 )
 
 client = AsyncOpenAI(
-    api_key=os.getenv("API_KEY"),
+    api_key=os.getenv("OPENAI_API_KEY"),
 )
 
-mistral_api_key = os.getenv("MISTRAL_API")
+mistral_api_key = os.getenv("MISTRAL_API_KEY")
 mistral_client = Mistral(api_key=mistral_api_key)
 
 MESES = {
