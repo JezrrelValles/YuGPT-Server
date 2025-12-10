@@ -278,7 +278,6 @@ async def convert_pdf_to_text(pdf_file, bank):
     return process_data
 
 
-
 async def convert_scanned_pdf_to_text(pdf_path):
     try:
         with open(pdf_path, "rb") as file:
@@ -563,7 +562,7 @@ async def extract_previous(file: UploadFile = File(...)):
         )
 
 
-@app.post("/openai/new")
+@app.post("/new/")
 async def post_new(data: dict = Body(...)):
     try:
         extracted_text = data.get("extracted_text")
