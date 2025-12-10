@@ -264,15 +264,19 @@ def get_assistant_id(bank: str) -> str:
     return BANKS_TO_ASSISTANT_ID[bank]
 
 
-async def convert_pdf_to_text(pdf_path, bank):
-    with open(pdf_path, "rb") as pdf_file:
-        processor = BankProcessorFactory.get_processor(bank, pdf_file)
-        process_data = processor.process()
-        process_data = "\n".join(
-            [" ".join(map(str, row)).strip() for row in process_data]
-        )
+async def convert_pdf_to_text(pdf_file, bank):
+    # pdf_file ahora es un BytesIO, no una ruta
+    pdf_file.seek(0)  # asegurarse de que está al inicio
+
+    processor = BankProcessorFactory.get_processor(bank, pdf_file)
+    process_data = processor.process()
+
+    process_data = "\n".join(
+        [" ".join(map(str, row)).strip() for row in process_data]
+    )
 
     return process_data
+
 
 
 async def convert_scanned_pdf_to_text(pdf_path):
@@ -488,22 +492,25 @@ async def wait_on_run(thread_id: str, run_id: str, polling_interval: int = 3):
 
 @app.post("/extract_account/")
 async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
-    assistant = get_assistant_id(bank)
-    file_location = f"temp_{file.filename}"
-
     try:
-        with open(file_location, "wb") as f:
-            f.write(await file.read())
+        assistant = get_assistant_id(bank)
 
+        # Leer archivo en memoria
+        file_bytes = await file.read()
+        memory_file = BytesIO(file_bytes)
+
+        # Primero intentar la función principal
         try:
-            text = await convert_pdf_to_text(file_location, bank.lower())
+            text = await convert_pdf_to_text(memory_file, bank.lower())
         except Exception as e:
             print(f"Error en convert_pdf_to_text: {e}")
             text = None
 
+        # Si falló, intentar la alternativa
         if not text:
             try:
-                text = await convert_scanned_pdf_to_text(file_location)
+                memory_file.seek(0)  # reset buffer
+                text = await convert_scanned_pdf_to_text(memory_file)
             except Exception as e:
                 print(f"Error en convert_scanned_pdf_to_text: {e}")
                 return JSONResponse(
@@ -516,9 +523,47 @@ async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
             "filename": file.filename,
             "extracted_text": text,
         }
-    finally:
-        if os.path.exists(file_location):
-            os.remove(file_location)
+
+    except Exception as e:
+        return JSONResponse(
+            content={"error": f"Error interno: {str(e)}"},
+            status_code=500,
+        )
+
+
+# @app.post("/extract_account/")
+# async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
+#     assistant = get_assistant_id(bank)
+#     file_location = f"temp_{file.filename}"
+
+#     try:
+#         with open(file_location, "wb") as f:
+#             f.write(await file.read())
+
+#         try:
+#             text = await convert_pdf_to_text(file_location, bank.lower())
+#         except Exception as e:
+#             print(f"Error en convert_pdf_to_text: {e}")
+#             text = None
+
+#         if not text:
+#             try:
+#                 text = await convert_scanned_pdf_to_text(file_location)
+#             except Exception as e:
+#                 print(f"Error en convert_scanned_pdf_to_text: {e}")
+#                 return JSONResponse(
+#                     content={"error": f"Error al procesar PDF: {str(e)}"},
+#                     status_code=500,
+#                 )
+
+#         return {
+#             "assistant": assistant,
+#             "filename": file.filename,
+#             "extracted_text": text,
+#         }
+#     finally:
+#         if os.path.exists(file_location):
+#             os.remove(file_location)
 
 
 @app.post("/extract_aux/")
