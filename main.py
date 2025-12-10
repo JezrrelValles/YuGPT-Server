@@ -531,41 +531,6 @@ async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
         )
 
 
-# @app.post("/extract_account/")
-# async def extract_account(file: UploadFile = File(...), bank: str = Form(...)):
-#     assistant = get_assistant_id(bank)
-#     file_location = f"temp_{file.filename}"
-
-#     try:
-#         with open(file_location, "wb") as f:
-#             f.write(await file.read())
-
-#         try:
-#             text = await convert_pdf_to_text(file_location, bank.lower())
-#         except Exception as e:
-#             print(f"Error en convert_pdf_to_text: {e}")
-#             text = None
-
-#         if not text:
-#             try:
-#                 text = await convert_scanned_pdf_to_text(file_location)
-#             except Exception as e:
-#                 print(f"Error en convert_scanned_pdf_to_text: {e}")
-#                 return JSONResponse(
-#                     content={"error": f"Error al procesar PDF: {str(e)}"},
-#                     status_code=500,
-#                 )
-
-#         return {
-#             "assistant": assistant,
-#             "filename": file.filename,
-#             "extracted_text": text,
-#         }
-#     finally:
-#         if os.path.exists(file_location):
-#             os.remove(file_location)
-
-
 @app.post("/extract_aux/")
 async def extract_aux(file: UploadFile = File(...)):
     try:
@@ -598,7 +563,7 @@ async def extract_previous(file: UploadFile = File(...)):
         )
 
 
-@app.post("/api/new")
+@app.post("/openai/new")
 async def post_new(data: dict = Body(...)):
     try:
         extracted_text = data.get("extracted_text")
